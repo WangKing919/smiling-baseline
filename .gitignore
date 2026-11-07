@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+/upstream/video/
+/upstream/replay/
+/upstream/eval_replay/

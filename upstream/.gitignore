@@ -1,0 +1,7 @@
+**.pyc
+**.mp4
+.DS_Store
+.vscode
+models
+outputs
+wandb
