@@ -12,7 +12,12 @@ export LD_LIBRARY_PATH="${MUJOCO_PY_MUJOCO_PATH}/bin:${LD_LIBRARY_PATH:-}"
 export NVIDIA_VISIBLE_DEVICES=$(strings /proc/1/environ | awk -F= '$1 == "NVIDIA_VISIBLE_DEVICES" { print $2 }')
 export CUDA_VISIBLE_DEVICES=$(nvidia-smi -i $NVIDIA_VISIBLE_DEVICES --query-gpu=index --format=csv,noheader | paste -sd ',')
 
-UV_VENV="${UV_VENV:-${HERE}/.venv}"
+if [[ -z "${UV_VENV:-}" ]]; then
+  UV_VENV="${HERE}/.venv"
+  if [[ ! -f "${UV_VENV}/bin/activate" ]]; then
+    UV_VENV="${HERE}/../.venv"
+  fi
+fi
 if [[ ! -f "${UV_VENV}/bin/activate" ]]; then
   echo "Missing ${UV_VENV}/bin/activate; set UV_VENV to your existing uv environment." >&2
   exit 1
