@@ -7,7 +7,6 @@ import importlib
 import os
 from pathlib import Path
 
-import dmc2gym
 from algorithm.diffusion import Diff
 from algorithm.dac import DAC
 
@@ -45,16 +44,16 @@ def make_alg(cfg, obs_dim, action_dim):
         raise NotImplementedError
 
 
-def make_agent(cfg):
+def make_agent(cfg, local_logger=None):
     print(f"Making agent: {cfg.agent.name}")
     if cfg.agent.name == "sac":
         import agent.sac.agent
 
-        return agent.sac.agent.SACAgent(cfg)
+        return agent.sac.agent.SACAgent(cfg, local_logger=local_logger)
     elif cfg.agent.name == "dreamerv3":
         import agent.dreamerv3.agent
 
-        return agent.dreamerv3.agent.Dreamerv3Agent(cfg)
+        return agent.dreamerv3.agent.Dreamerv3Agent(cfg, local_logger=local_logger)
     else:
         raise NotImplementedError
 
@@ -66,6 +65,8 @@ def make_env(cfg, index=0, **overrides):
     if suite != "humanoidbench":  # dmc
 
         """Helper function to create dm_control environment"""
+        import dmc2gym
+
         if suite == "ball":
             domain_name = "ball_in_cup"
             task_name = "catch"

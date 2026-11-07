@@ -45,10 +45,11 @@ class ObservationBuffer:
 
 
 class Agent(object):
-    def __init__(self, cfg):
+    def __init__(self, cfg, local_logger=None):
         self.cfg = cfg
+        self.local_logger = local_logger
 
-        self.work_dir = Path.cwd()
+        self.work_dir = local_logger.log_dir if local_logger is not None else Path.cwd()
         print(f"workspace: {self.work_dir}")
 
         self.device = torch.device(cfg.device)

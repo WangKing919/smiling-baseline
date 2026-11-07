@@ -8,7 +8,6 @@ import os
 import sys
 import time
 import pickle as pkl
-import wandb
 import hydra
 from pathlib import Path
 from omegaconf import OmegaConf
@@ -16,7 +15,6 @@ from tqdm import tqdm
 from collections import namedtuple
 
 from video import VideoRecorder
-from logger import Logger
 from replay_buffer import ReplayBuffer
 import utils
 
@@ -34,8 +32,8 @@ Snapshot = namedtuple(
 
 
 class SACAgent(Agent):
-    def __init__(self, cfg):
-        super().__init__(cfg=cfg)
+    def __init__(self, cfg, local_logger=None):
+        super().__init__(cfg=cfg, local_logger=local_logger)
 
         self.env = utils.make_env(cfg)
 
@@ -56,6 +54,9 @@ class SACAgent(Agent):
 
         self.video_recorder = VideoRecorder(self.work_dir if cfg.save_video else None)
         self.step = 0
+        self.episode = 0
+        self.next_eval_step = int(cfg.eval_frequency)
+        self.next_update_log_step = cfg.agent.params.num_seed_steps
 
         self.save_action = cfg.use_action
         self.obs_buffer = ObservationBuffer(capacity=cfg.obs_buffer_capacity)
@@ -74,11 +75,11 @@ class SACAgent(Agent):
         self.reward_fn = reward_fn
         self._prepared = True
 
-    def evaluate(self, video_prefix=None):
+    def evaluate(self, video_prefix=None, return_statistics=False):
         # for i in range(20):
         #     self.env.reset()
 
-        average_episode_reward = 0
+        episode_rewards = []
         for episode in range(self.cfg.num_eval_episodes):
             obs = self.env.reset()[0]
             self.alg.reset()
@@ -94,13 +95,16 @@ class SACAgent(Agent):
                 self.video_recorder.record(self.env)
                 episode_reward += reward
 
-            average_episode_reward += episode_reward
+            episode_rewards.append(episode_reward)
             self.video_recorder.save(
                 f"{self.step if video_prefix is None else video_prefix}.mp4"
             )
-        average_episode_reward /= self.cfg.num_eval_episodes
-
-        return average_episode_reward
+        mean = float(np.mean(episode_rewards))
+        if return_statistics:
+            n = len(episode_rewards)
+            std = float(np.std(episode_rewards, ddof=1)) if n > 1 else 0.0
+            return mean, std, n
+        return mean
 
     def run_bc(self, dataset, num_train_epochs):
         for i in range(num_train_epochs):
@@ -109,7 +113,8 @@ class SACAgent(Agent):
 
             if i % 2000 == 0:
                 ret = self.evaluate()
-                metrics["episode_reward"] = ret
+                if self.local_logger is not None:
+                    self.local_logger.log({"eval/episode_reward": ret}, step=i)
                 print(f"eval: {ret}")
 
             obs = torch.tensor(dataset[:, : self.get_obs_shape()]).to(self.device)
@@ -117,18 +122,15 @@ class SACAgent(Agent):
 
             metrics.update(self.alg.bc_update(obs, action, loss_type=self.cfg.alg.loss))
 
-            if self.cfg.log_wandb:
-                wandb.log(metrics)
-
             if i % 100 == 0:
+                if self.local_logger is not None:
+                    self.local_logger.log({"bc/loss": metrics["loss"]}, step=i)
                 print(f"epoch {i}, loss: {metrics['loss']}")
 
     def run(self, num_train_steps):
         assert self._prepared, "Call prepare() before run()"
 
         reward_fn = self.reward_fn
-
-        episode = 0
 
         obs = self.snapshot.obs
         done = self.snapshot.done
@@ -139,39 +141,48 @@ class SACAgent(Agent):
         start_time = time.time()
 
         end_step = self.step + num_train_steps
-        # init_step = self.step
+        eval_frequency = int(self.cfg.eval_frequency)
+        log_frequency = int(self.cfg.log_frequency)
+        save_frequency = int(self.cfg.save_model_every)
 
         while self.step < end_step:
-            metrics = dict()
-            metrics["train/global_step"] = self.step
-
             if done:
-
                 if self.step > 0:
-                    metrics["train/duration"] = time.time() - start_time
+                    duration = time.time() - start_time
                     start_time = time.time()
-                    metrics["train/episode_reward"] = episode_reward
-                    episode += 1
-                    metrics["train/episode"] = episode
+                    self.episode += 1
+                    if self.local_logger is not None:
+                        self.local_logger.log(
+                            {
+                                "train/episode_reward": episode_reward,
+                                "train/episode": self.episode,
+                                "train/episode_length": episode_step,
+                                "train/duration": duration,
+                            },
+                            step=self.step,
+                        )
 
                     print(
-                        f"Step: {self.step}, Episode: {episode}, Reward: {episode_reward}"
+                        f"Step: {self.step}, Episode: {self.episode}, Reward: {episode_reward}"
                     )
 
-                    # evaluate agent periodically
-                    if self.step % self.cfg.eval_frequency == 0:
-                        metrics["eval/episode"] = episode
-                        metrics["eval/episode_reward"] = self.evaluate()
-
-                    if self.step % self.cfg.save_model_every == 0:
-                        path = (
-                            self.work_dir
-                            / "models"
-                            / self.cfg.run_name
-                            / str(self.step)
-                        )
-                        path.mkdir(parents=True, exist_ok=True)
-                        self.alg.save(path)
+                    # Evaluation uses this environment, so wait for the episode
+                    # boundary after crossing the next evaluation step.
+                    if eval_frequency > 0 and self.step >= self.next_eval_step:
+                        self.next_eval_step = (
+                            self.step // eval_frequency + 1
+                        ) * eval_frequency
+                        mean, std, n = self.evaluate(return_statistics=True)
+                        if self.local_logger is not None:
+                            self.local_logger.log(
+                                {
+                                    "eval/episode": self.episode,
+                                    "eval/episode_reward": mean,
+                                    "eval/episode_reward_std": std,
+                                    "eval/episode_reward_n": n,
+                                },
+                                step=self.step,
+                            )
 
                 obs = self.env.reset()[0]
                 done = False
@@ -194,14 +205,26 @@ class SACAgent(Agent):
 
             # run training update
             if self.step >= self.cfg.agent.params.num_seed_steps:
-                metrics.update(
-                    self.alg.update(
-                        self.replay_buffer,
-                        self.step,
-                        reward_fn,
-                        use_action=self.save_action,
-                    )
+                metrics = self.alg.update(
+                    self.replay_buffer,
+                    self.step,
+                    reward_fn,
+                    use_action=self.save_action,
                 )
+                if (
+                    self.local_logger is not None
+                    and log_frequency > 0
+                    and self.step >= self.next_update_log_step
+                    and "train_actor/loss" in metrics
+                ):
+                    self.next_update_log_step = self.step + log_frequency
+                    # Batch metrics and completed episodes occur on different steps.
+                    metrics["train_batch/reward"] = metrics.pop("train/batch_reward")
+                    metrics = {
+                        key: value.detach().item() if isinstance(value, torch.Tensor) else value
+                        for key, value in metrics.items()
+                    }
+                    self.local_logger.log(metrics, step=self.step)
 
             next_obs, reward, terminated, truncated, _ = self.env.step(action)
             done = terminated or truncated
@@ -218,8 +241,10 @@ class SACAgent(Agent):
             episode_step += 1
             self.step += 1
 
-            if self.cfg.log_wandb:
-                wandb.log(metrics)
+            if save_frequency > 0 and self.step % save_frequency == 0:
+                path = self.work_dir / "models" / self.cfg.run_name / str(self.step)
+                path.mkdir(parents=True, exist_ok=True)
+                self.alg.save(path)
 
         self.snapshot = Snapshot(
             obs=obs,

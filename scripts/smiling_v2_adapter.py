@@ -29,13 +29,12 @@ def main():
         suite, task = cfg.env.split("_", 1)
         if suite != "gymnasium":
             return upstream_make_env(cfg, index=index, **overrides)
-        env = gym.make(
-            task,
-            render_mode="rgb_array" if cfg.save_video else None,
-            height=256,
-            width=256,
-            camera_id=0,
+        render_options = (
+            dict(render_mode="rgb_array", height=256, width=256, camera_id=0)
+            if cfg.save_video
+            else {}
         )
+        env = gym.make(task, **render_options)
         env.reset(seed=cfg.seed)
         return LegacyRenderEnv(env)
 

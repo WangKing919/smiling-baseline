@@ -307,58 +307,6 @@ class TensorBoardOutput(AsyncOutput):
             tf.summary.image(name, video, step)
 
 
-class WandBOutput:
-    def __init__(self, logdir, name, config=None, pattern=r".*"):
-        self._pattern = re.compile(pattern)
-        import wandb
-
-        wandb_logdir = str(logdir)
-
-        # wandb.init(
-        #     project=config.run.wandb_project,
-        #     name=name,
-        #     # sync_tensorboard=True,
-        #     entity=config.run.wandb_entity,
-        #     config=config and dict(config),
-        #     dir=wandb_logdir,
-        # )
-        self._wandb = wandb
-        self._name = name
-
-    def __call__(self, summaries):
-        bystep = collections.defaultdict(dict)
-        wandb = self._wandb
-        for step, name, value in summaries:
-            if not self._pattern.search(name):
-                continue
-            if isinstance(value, (str, plt.Figure)):
-                bystep[step][name] = value
-            elif isinstance(value, pathlib.Path):
-                bystep[step][name] = wandb.Video(str(value))
-            elif len(value.shape) == 0:
-                bystep[step][name] = float(value)
-            elif len(value.shape) == 1:
-                bystep[step][name] = wandb.Histogram(value)
-            elif len(value.shape) in (2, 3):
-                value = value[..., None] if len(value.shape) == 2 else value
-                assert value.shape[3] in [1, 3, 4], value.shape
-                if value.dtype != np.uint8:
-                    value = (255 * np.clip(value, 0, 1)).astype(np.uint8)
-                # value = np.transpose(value, [2, 0, 1])
-                bystep[step][name] = wandb.Image(value)
-            elif len(value.shape) == 4:
-                assert value.shape[3] in [1, 3, 4], value.shape
-                value = np.transpose(value, [0, 3, 1, 2])
-                if value.dtype != np.uint8:
-                    value = (255 * np.clip(value, 0, 1)).astype(np.uint8)
-                bystep[step][name] = wandb.Video(
-                    value, caption=f"{self._name}_{step}_{name}", fps=20, format="mp4"
-                )
-
-        for step, metrics in bystep.items():
-            self._wandb.log(metrics, step=step)
-
-
 class MLFlowOutput:
     def __init__(self, run_name=None, resume_id=None, config=None, prefix=None):
         import mlflow

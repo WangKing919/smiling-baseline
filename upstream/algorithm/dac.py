@@ -1,10 +1,8 @@
-import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 from algorithm import Algorithm
 
@@ -69,17 +67,15 @@ class DAC(Algorithm):
         val_dataloader,
         num_epochs,
         verbose: bool,
-        log: bool,
         global_epoch: int,
+        local_logger=None,
+        step=None,
     ):
         for epoch in range(num_epochs):
 
             if verbose:
                 progress_bar = tqdm(total=len(dataloader))
                 progress_bar.set_description(f"Epoch {epoch}")
-
-            metrics = dict()
-            metrics.update({"dac/global_epoch": global_epoch})
 
             for _, batch in enumerate(dataloader):
 
@@ -128,9 +124,11 @@ class DAC(Algorithm):
             if verbose:
                 progress_bar.close()
 
-            metrics.update(logs)  # only log last batch
-            if log:
-                wandb.log(metrics)
+            if local_logger is not None:
+                local_logger.log(
+                    {**logs, "dac/global_epoch": global_epoch, "dac/update_epoch": epoch},
+                    step=step,
+                )
 
     @torch.no_grad()
     def reward_fn(self, obs):

@@ -1,5 +1,4 @@
 import math
-import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -77,9 +76,10 @@ class DiffusionModel:
         hidden_dim,
         hidden_depth,
         linear=False,
+        device="cuda",
     ):
 
-        self.device = torch.device("cuda")
+        self.device = torch.device(device)
 
         assert isinstance(obs_dim, tuple) or isinstance(obs_dim, int)
 
@@ -114,8 +114,10 @@ class DiffusionModel:
         val_dataloader,
         num_epochs,
         verbose: bool,
-        log: bool,
         global_epoch: int,
+        local_logger=None,
+        group="diffusion",
+        step=None,
     ):
 
         # Now you train the model
@@ -125,8 +127,7 @@ class DiffusionModel:
             #     progress_bar = tqdm(total=len(dataloader))
             #     progress_bar.set_description(f"Epoch {epoch}")
 
-            metrics = dict()
-            metrics.update({"diffusion/global_epoch": global_epoch})
+            log_step = epoch if step is None else step
 
             train_loss = 0
             for _, batch in enumerate(dataloader):
@@ -161,16 +162,18 @@ class DiffusionModel:
                 loss.backward()
                 self.optimizer.step()
 
-                logs = {
-                    "diffusion/loss": loss.detach().item(),
-                    "diffusion/lr": self.optimizer.param_groups[0]["lr"],
-                }
-
-                # if verbose:
-                #     progress_bar.update(1)
-                #     progress_bar.set_postfix(**logs)
-
             train_loss /= len(dataloader.dataset)
+
+            if local_logger is not None:
+                local_logger.log(
+                    {
+                        f"{group}/loss": train_loss,
+                        f"{group}/lr": self.optimizer.param_groups[0]["lr"],
+                        f"{group}/global_epoch": global_epoch,
+                        f"{group}/update_epoch": epoch,
+                    },
+                    step=log_step,
+                )
 
             if verbose and epoch % 5 == 0:
                 print(f"Epoch {epoch} : train_loss {train_loss}")
@@ -209,11 +212,8 @@ class DiffusionModel:
                     if verbose:
                         print(f"val_loss: {val_loss}")
 
-                    metrics.update({"diffusion/val_loss": val_loss})
-
-            metrics.update(logs)  # only log last batch
-            if log:
-                wandb.log(metrics)
+                    if local_logger is not None:
+                        local_logger.log({f"{group}_val/loss": val_loss}, step=log_step)
 
     def save(self, model_dir):
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -238,6 +238,7 @@ class Diff(Algorithm):
             hidden_dim=cfg.alg.hidden_dim,
             hidden_depth=cfg.alg.hidden_depth,
             linear=cfg.use_linear,
+            device=self.device,
         )
 
         self.current_diff = DiffusionModel(
@@ -248,6 +249,7 @@ class Diff(Algorithm):
             hidden_dim=cfg.alg.hidden_dim,
             hidden_depth=cfg.alg.hidden_depth,
             linear=cfg.use_linear,
+            device=self.device,
         )
 
         self.normalize_reward = cfg.alg.normalize_reward
@@ -265,9 +267,10 @@ class Diff(Algorithm):
         val_dataloader,
         num_epochs: int,
         verbose: bool,
-        log: bool,
         global_epoch: int,
         train_expert: bool = False,
+        local_logger=None,
+        step=None,
     ):
         diff = self.expert_diff if train_expert else self.current_diff
         diff.train(
@@ -275,8 +278,10 @@ class Diff(Algorithm):
             val_dataloader=val_dataloader,
             num_epochs=num_epochs,
             verbose=verbose,
-            log=log,
             global_epoch=global_epoch,
+            local_logger=local_logger,
+            group="diffusion_expert" if train_expert else "diffusion",
+            step=step,
         )
 
     @torch.no_grad()

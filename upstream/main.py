@@ -1,30 +1,24 @@
-import os
-import random
 import time
-import math
 import hydra
 from omegaconf import OmegaConf
 import numpy as np
 import torch
-import wandb
 from pathlib import Path
 
 import utils
+from run_logging import training_log
 
 
 @hydra.main(version_base="1.2", config_path="./config", config_name="train")
 def main(cfg):
+    with training_log(cfg, cfg.alg.name) as local_logger:
+        train(cfg, local_logger)
 
-    if cfg.log_wandb:
-        wandb.init(
-            project="smiling",
-            config=OmegaConf.to_container(cfg),
-            name=cfg.run_name,
-            monitor_gym=True,
-            save_code=True,
-        )
+
+def train(cfg, local_logger):
     utils.set_seed_everywhere(cfg.seed)
-    agent = utils.make_agent(cfg)
+    agent = utils.make_agent(cfg, local_logger=local_logger)
+    OmegaConf.save(cfg, local_logger.log_dir / "config.yaml", resolve=True)
 
     # init alg
     obs_dim = agent.get_obs_shape()
@@ -76,11 +70,13 @@ def main(cfg):
                 val_dataloader=val_dataloader,
                 num_epochs=cfg.alg.expert_train_num_epochs,
                 verbose=True,
-                log=cfg.log_wandb,
+                local_logger=local_logger,
                 global_epoch=0,
                 train_expert=True,
             )
-            alg.save_expert_diff(f"diff_{cfg.run_name}")
+            alg.save_expert_diff(local_logger.log_dir / "models" / f"diff_{cfg.run_name}")
+            if cfg.local_log_plot_every > 0:
+                local_logger.plot()
         else:
             alg.load_expert_diff(cfg.alg.diff_model_name)
 
@@ -148,13 +144,15 @@ def main(cfg):
             val_dataloader=None,
             num_epochs=cfg.alg.epochs,
             verbose=False,
-            log=cfg.log_wandb,
+            local_logger=local_logger,
             global_epoch=epoch,
+            step=int(agent.step),
         )
         print(f"Updating {cfg.alg.name} took {time.time() - start_time:.2f} seconds")
 
-        if cfg.log_wandb:
-            wandb.log(metrics)
+        local_logger.log(metrics, step=int(agent.step))
+        if cfg.local_log_plot_every > 0 and (epoch + 1) % cfg.local_log_plot_every == 0:
+            local_logger.plot()
 
 
 if __name__ == "__main__":

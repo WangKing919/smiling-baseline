@@ -5,7 +5,6 @@ import torch.nn.functional as F
 import math
 import hydra
 import time
-import wandb
 import re
 import jax
 from tqdm import tqdm
@@ -29,7 +28,7 @@ def make_agent(config):
     return agent
 
 
-def make_logger(config, env, wandb_enabled, logdir):
+def make_logger(config, env, logdir):
     step = embodied.Counter()
     multiplier = config.env.get(env.split("_")[0], {}).get("repeat", 1)
     outputs = [
@@ -40,9 +39,6 @@ def make_logger(config, env, wandb_enabled, logdir):
         #     logdir, config.run.log_video_fps, config.tensorboard_videos
         # ),
     ]
-    if wandb_enabled:
-        wandb_run_name = f"{env}.{config.method}.{config.seed}"
-        outputs.append(embodied.logger.WandBOutput(logdir, wandb_run_name, config))
     logger = embodied.Logger(step, outputs, multiplier)
     return logger
 
@@ -83,8 +79,8 @@ def override_config(old_config, new_flattened_dict, parent_key="", sep="."):
 
 class Dreamerv3Agent(Agent):
 
-    def __init__(self, cfg):
-        super().__init__(cfg=cfg)
+    def __init__(self, cfg, local_logger=None):
+        super().__init__(cfg=cfg, local_logger=local_logger)
 
         self.env = utils.make_env(cfg, 0)
 
@@ -110,13 +106,15 @@ class Dreamerv3Agent(Agent):
         logdir = embodied.Path(self.work_dir / "models" / cfg.run_name)
         logdir.mkdirs()
         self.logdir = logdir
+        if local_logger is not None:
+            cfg.agent.logdir = str(logdir)
         print("Logdir", logdir)
 
         # below is copied from original train_eval.py
         self.agent = make_agent(cfg)
         self.train_replay = make_replay(cfg.agent, "replay")
         self.eval_replay = make_replay(cfg.agent, "eval_replay", is_eval=True)
-        self.logger = make_logger(cfg.agent, cfg.env, cfg.log_wandb, logdir)
+        self.logger = make_logger(cfg.agent, cfg.env, logdir)
 
         self.obs_buffer = ObservationBuffer(capacity=cfg.obs_buffer_capacity)
 
@@ -125,6 +123,7 @@ class Dreamerv3Agent(Agent):
         self.agg = embodied.Agg()
         train_episodes = defaultdict(embodied.Agg)
         self.train_epstats = embodied.Agg()
+        self.eval_returns = []
         eval_episodes = defaultdict(embodied.Agg)
         self.eval_epstats = embodied.Agg()
 
@@ -153,7 +152,7 @@ class Dreamerv3Agent(Agent):
             if tran["is_first"]:
                 episode.reset()
 
-            if worker < args.log_video_streams:
+            if cfg.save_video and worker < args.log_video_streams:
                 for key in args.log_keys_video:
                     if key in tran:
                         episode.add(f"policy_{key}", tran[key], agg="stack")
@@ -168,6 +167,17 @@ class Dreamerv3Agent(Agent):
 
             if tran["is_last"]:
                 result = episode.result()
+                if self.local_logger is not None:
+                    if mode == "eval":
+                        self.eval_returns.append(float(result["score"]))
+                    else:
+                        self.local_logger.log(
+                            {
+                                "train/episode_reward": result["score"],
+                                "train/episode_length": result["length"] - 1,
+                            },
+                            step=int(self.step),
+                        )
                 self.logger.add(
                     {
                         "score": result["score"],
@@ -182,7 +192,7 @@ class Dreamerv3Agent(Agent):
                     },
                     prefix="results",
                 )
-                if worker < args.log_video_streams:
+                if cfg.save_video and worker < args.log_video_streams:
                     for key in args.log_keys_video:
                         if key in tran:
                             self.logger.add(
@@ -363,7 +373,8 @@ class Dreamerv3Agent(Agent):
 
             if i % 2000 == 0:
                 ret = self.my_evaluate(actor=actor)
-                metrics["episode_reward"] = ret
+                if self.local_logger is not None:
+                    self.local_logger.log({"eval/episode_reward": ret}, step=i)
                 print(f"eval: {ret}")
 
             obs = torch.tensor(dataset[:, : self.get_obs_shape()]).to(self.device)
@@ -384,10 +395,9 @@ class Dreamerv3Agent(Agent):
             loss.backward()
             actor_optimizer.step()
 
-            if self.cfg.log_wandb:
-                wandb.log(metrics)
-
             if i % 100 == 0:
+                if self.local_logger is not None:
+                    self.local_logger.log({"bc/loss": metrics["loss"]}, step=i)
                 print(f"epoch {i}, loss: {metrics['loss']}")
 
     def run(self, num_train_steps):
@@ -408,7 +418,19 @@ class Dreamerv3Agent(Agent):
             if self.should_eval(self.step):
                 print("Start evaluation")
                 self.eval_driver.reset(self.agent.init_policy)
+                self.eval_returns.clear()
                 self.eval_driver(eval_policy, episodes=self.eval_eps)
+                if self.eval_returns:
+                    n = len(self.eval_returns)
+                    std = np.std(self.eval_returns, ddof=1) if n > 1 else 0.0
+                    self.local_logger.log(
+                        {
+                            "eval/episode_reward": np.mean(self.eval_returns),
+                            "eval/episode_reward_std": std,
+                            "eval/episode_reward_n": n,
+                        },
+                        step=int(self.step),
+                    )
                 self.logger.add(self.eval_epstats.result(), prefix="epstats")
                 if len(self.eval_replay):
                     self.logger.add(

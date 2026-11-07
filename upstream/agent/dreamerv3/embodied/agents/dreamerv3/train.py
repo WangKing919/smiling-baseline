@@ -140,9 +140,6 @@ def make_logger(config):
         #     logdir, config.run.log_video_fps, config.tensorboard_videos
         # ),
     ]
-    if config.run.get("wandb", False):
-        wandb_run_name = f"{config.task}.{config.method}.{config.seed}"
-        outputs.append(embodied.logger.WandBOutput(logdir, wandb_run_name, config))
     logger = embodied.Logger(step, outputs, multiplier)
     return logger
 

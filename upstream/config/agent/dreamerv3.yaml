@@ -48,9 +48,6 @@ run:
   log_video_fps: 20
   log_video_streams: 4
   log_episode_timeout: 60
-  # wandb: False
-  # wandb_entity: robot-learning
-  # wandb_project: humanoid-bench
   from_checkpoint: ''
   actor_addr: 'tcp://localhost:{random}'
   replay_addr: 'ipc:///tmp/replay{random}'

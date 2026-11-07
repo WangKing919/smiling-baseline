@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+/logs/
 /upstream/video/
 /upstream/replay/
 /upstream/eval_replay/
