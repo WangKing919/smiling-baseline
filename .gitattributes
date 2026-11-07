@@ -1,2 +1,3 @@
 upstream/** -text
 *.npy binary
+/run_smiling_*_v2_full.sh text eol=lf
