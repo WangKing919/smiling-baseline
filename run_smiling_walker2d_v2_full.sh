@@ -17,6 +17,10 @@ if [[ -z "${UV_VENV:-}" ]]; then
   if [[ ! -f "${UV_VENV}/bin/activate" ]]; then
     UV_VENV="${HERE}/../.venv"
   fi
+  FISHERADV_VENV=/home/ubuntu/tianruijie/wangjian/fisheradv/.venv
+  if [[ ! -f "${UV_VENV}/bin/activate" && -f "${FISHERADV_VENV}/bin/activate" ]]; then
+    UV_VENV="${FISHERADV_VENV}"
+  fi
 fi
 if [[ ! -f "${UV_VENV}/bin/activate" ]]; then
   echo "Missing ${UV_VENV}/bin/activate; set UV_VENV to your existing uv environment." >&2

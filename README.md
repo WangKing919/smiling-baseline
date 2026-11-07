@@ -4,7 +4,7 @@
 
 ## 在 Linux 训练机运行
 
-在本仓库根目录按任务执行对应的 Bash 脚本。脚本沿用原项目从 `/proc/1/environ` 读取 NVIDIA 设备并通过 `nvidia-smi` 映射 CUDA 编号的方式。默认依次查找本目录和上一级目录的 `.venv`。uv 环境位于其他目录时，用 `UV_VENV` 指向现有的 `.venv`。
+在本仓库根目录按任务执行对应的 Bash 脚本。脚本沿用原项目从 `/proc/1/environ` 读取 NVIDIA 设备并通过 `nvidia-smi` 映射 CUDA 编号的方式。默认依次查找本目录、上一级目录的 `.venv`，以及云端的 `/home/ubuntu/tianruijie/wangjian/fisheradv/.venv`。显式设置的 `UV_VENV` 优先。
 
 ```bash
 bash run_smiling_ant_v2_full.sh
