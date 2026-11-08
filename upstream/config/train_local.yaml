@@ -1,0 +1,14 @@
+defaults:
+  - train
+  - _self_
+  - override hydra/job_logging: disabled
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+log_wandb: false
+local_log_root: null
+local_log_plot_every: 100
+eval_seeds: null

@@ -35,6 +35,16 @@ class SACAgent(Agent):
     def __init__(self, cfg, local_logger=None):
         super().__init__(cfg=cfg, local_logger=local_logger)
 
+        self.eval_seeds = cfg.get("eval_seeds")
+        if self.eval_seeds is not None and (
+            not cfg.env.startswith("gymnasium_")
+            or not self.eval_seeds
+            or any(type(seed) is not int or seed < 0 for seed in self.eval_seeds)
+        ):
+            raise ValueError(
+                "eval_seeds requires Gymnasium SAC and a nonempty list of nonnegative integers"
+            )
+        self.eval_env = None
         self.env = utils.make_env(cfg)
 
         cfg.agent.params.obs_dim = self.env.observation_space.shape[0]
@@ -55,7 +65,7 @@ class SACAgent(Agent):
         self.video_recorder = VideoRecorder(self.work_dir if cfg.save_video else None)
         self.step = 0
         self.episode = 0
-        self.next_eval_step = int(cfg.eval_frequency)
+        self.next_compare_eval_step = int(cfg.eval_frequency)
         self.next_update_log_step = cfg.agent.params.num_seed_steps
 
         self.save_action = cfg.use_action
@@ -75,24 +85,29 @@ class SACAgent(Agent):
         self.reward_fn = reward_fn
         self._prepared = True
 
-    def evaluate(self, video_prefix=None, return_statistics=False):
-        # for i in range(20):
-        #     self.env.reset()
-
+    def evaluate(self, video_prefix=None, return_statistics=False, *, env=None, seeds=None):
+        episode_count = int(self.cfg.num_eval_episodes)
+        if episode_count < 1:
+            raise ValueError("num_eval_episodes must be positive")
+        env = self.env if env is None else env
+        reset_seeds = [None] * episode_count if seeds is None else seeds
         episode_rewards = []
-        for episode in range(self.cfg.num_eval_episodes):
-            obs = self.env.reset()[0]
+        for episode, seed in enumerate(reset_seeds):
+            if seed is None:
+                obs, _ = env.reset()
+            else:
+                obs, _ = env.reset(seed=seed)
             self.alg.reset()
-            self.video_recorder.init(enabled=(episode == 0))
+            self.video_recorder.init(enabled=(episode == 0 and env is self.env))
             done = False
             episode_reward = 0
             while not done:
                 with utils.eval_mode(self.alg):
                     action = self.alg.act(obs, sample=False)
                     # action = self.env.action_space.sample()
-                obs, reward, terminated, truncated, _ = self.env.step(action)
+                obs, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
-                self.video_recorder.record(self.env)
+                self.video_recorder.record(env)
                 episode_reward += reward
 
             episode_rewards.append(episode_reward)
@@ -105,6 +120,30 @@ class SACAgent(Agent):
             std = float(np.std(episode_rewards, ddof=1)) if n > 1 else 0.0
             return mean, std, n
         return mean
+
+    def _log_evaluation(self, group, result):
+        if self.local_logger is not None:
+            mean, std, n = result
+            self.local_logger.log(
+                {
+                    f"{group}/episode": self.episode,
+                    f"{group}/episode_reward": mean,
+                    f"{group}/episode_reward_std": std,
+                    f"{group}/episode_reward_n": n,
+                },
+                step=self.step,
+            )
+
+    def _evaluate_for_comparison(self):
+        if self.eval_env is None:
+            self.eval_env = utils.make_env(self.cfg, render=False)
+        seeds = [
+            seed + episode * len(self.eval_seeds)
+            for episode in range(self.cfg.num_eval_episodes)
+            for seed in self.eval_seeds
+        ]
+        with torch.no_grad():
+            return self.evaluate(return_statistics=True, env=self.eval_env, seeds=seeds)
 
     def run_bc(self, dataset, num_train_epochs):
         for i in range(num_train_epochs):
@@ -166,23 +205,24 @@ class SACAgent(Agent):
                         f"Step: {self.step}, Episode: {self.episode}, Reward: {episode_reward}"
                     )
 
-                    # Evaluation uses this environment, so wait for the episode
-                    # boundary after crossing the next evaluation step.
-                    if eval_frequency > 0 and self.step >= self.next_eval_step:
-                        self.next_eval_step = (
+                    if eval_frequency > 0 and self.step % eval_frequency == 0:
+                        self._log_evaluation("eval", self.evaluate(return_statistics=True))
+
+                    # Log the project's comparison protocol on a separate simulator.
+                    if (
+                        self.eval_seeds is not None
+                        and eval_frequency > 0
+                        and self.step >= self.next_compare_eval_step
+                    ):
+                        self.next_compare_eval_step = (
                             self.step // eval_frequency + 1
                         ) * eval_frequency
-                        mean, std, n = self.evaluate(return_statistics=True)
-                        if self.local_logger is not None:
-                            self.local_logger.log(
-                                {
-                                    "eval/episode": self.episode,
-                                    "eval/episode_reward": mean,
-                                    "eval/episode_reward_std": std,
-                                    "eval/episode_reward_n": n,
-                                },
-                                step=self.step,
-                            )
+                        self._log_evaluation("eval_compare", self._evaluate_for_comparison())
+
+                    if save_frequency > 0 and self.step % save_frequency == 0:
+                        path = self.work_dir / "models" / self.cfg.run_name / str(self.step)
+                        path.mkdir(parents=True, exist_ok=True)
+                        self.alg.save(path)
 
                 obs = self.env.reset()[0]
                 done = False
@@ -229,8 +269,8 @@ class SACAgent(Agent):
             next_obs, reward, terminated, truncated, _ = self.env.step(action)
             done = terminated or truncated
 
-            # allow infinite bootstrap
             done = float(done)
+            # The upstream SAC bootstraps transitions at the episode time limit.
             done_no_max = 0 if episode_step + 1 == self.env._max_episode_steps else done
             episode_reward += reward
 
@@ -240,11 +280,6 @@ class SACAgent(Agent):
 
             episode_step += 1
             self.step += 1
-
-            if save_frequency > 0 and self.step % save_frequency == 0:
-                path = self.work_dir / "models" / self.cfg.run_name / str(self.step)
-                path.mkdir(parents=True, exist_ok=True)
-                self.alg.save(path)
 
         self.snapshot = Snapshot(
             obs=obs,

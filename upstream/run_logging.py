@@ -36,6 +36,7 @@ def training_log(cfg, algorithm):
         run_dir,
         environment_name=cfg.env.split("_", 1)[-1],
         eval_curve_label=episode_label,
+        live_plots=cfg.local_log_plot_every > 0,
     )
     print(f"Local logs: {run_dir}", flush=True)
     try:

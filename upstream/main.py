@@ -1,3 +1,7 @@
+from importlib.metadata import version
+import inspect
+import json
+import platform
 import time
 import hydra
 from omegaconf import OmegaConf
@@ -9,7 +13,10 @@ import utils
 from run_logging import training_log
 
 
-@hydra.main(version_base="1.2", config_path="./config", config_name="train")
+UPSTREAM_COMMIT = "c655d341575c559250681567eed7885ca4c0a69c"
+
+
+@hydra.main(version_base="1.2", config_path="./config", config_name="train_local")
 def main(cfg):
     with training_log(cfg, cfg.alg.name) as local_logger:
         train(cfg, local_logger)
@@ -29,12 +36,53 @@ def train(cfg, local_logger):
         action_dim=action_dim,
     )
 
+    reward_fn = alg.reward_fn if alg is not None else None
+    implementations = {"agent": type(agent)}
+    if cfg.agent.name == "sac":
+        implementations["sac"] = type(agent.alg)
+    if reward_fn is not None:
+        implementations["reward"] = reward_fn
+    upstream = Path(__file__).resolve().parent
+    runtime = {"environment": cfg.env, "algorithm": cfg.alg.name, "upstream_commit": UPSTREAM_COMMIT}
+    for role, implementation in implementations.items():
+        source = Path(inspect.getfile(inspect.unwrap(implementation))).resolve()
+        if not source.is_relative_to(upstream):
+            raise RuntimeError(f"{role} was imported from outside {upstream}: {source}")
+        runtime[role] = {
+            "name": f"{implementation.__module__}.{implementation.__qualname__}",
+            "file": str(source),
+        }
+    if cfg.agent.name == "sac" and cfg.env.startswith("gymnasium_"):
+        runtime["environment_entry_point"] = agent.env.unwrapped.spec.entry_point
+        runtime["environment_max_episode_steps"] = agent.env.spec.max_episode_steps
+        runtime["versions"] = {
+            "python": platform.python_version(),
+            "torch_cuda": torch.version.cuda,
+            **{
+                package: version(package)
+                for package in ("gymnasium", "mujoco-py", "numpy", "torch", "diffusers", "hydra-core", "omegaconf")
+            },
+        }
+    (local_logger.log_dir / "runtime.json").write_text(
+        json.dumps(runtime, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    if reward_fn is not None:
+        print(f"Training reward: {runtime['reward']['name']} ({runtime['reward']['file']})", flush=True)
+
     # expert stuff
     obs_save_dir = Path.cwd() / "models" / cfg.expert_path
     if cfg.alg.name == "smiling":
         if cfg.alg.diff_model_name is None:
             retain_every = cfg.expert_dataset_retain_every
             assert retain_every >= 1
+            if cfg.env.startswith("gymnasium_"):
+                suffix = "_a" if cfg.use_action else ""
+                expected_shape = (cfg.expert_dataset_num_obs, obs_dim + action_dim)
+                for split in ("train", "val"):
+                    path = obs_save_dir / f"{split}_obs_{cfg.expert_dataset_num_obs}{suffix}.npy"
+                    shape = np.load(path, mmap_mode="r").shape
+                    if shape != expected_shape:
+                        raise ValueError(f"{path}: expected {expected_shape} expert observations, got {shape}")
             train_obs_batch = utils.load_or_collect_obs(
                 obs_save_dir
                 / f"train_obs_{cfg.expert_dataset_num_obs}{'_a' if cfg.use_action else ''}.npy",
@@ -99,7 +147,7 @@ def train(cfg, local_logger):
         raise NotImplementedError
 
     # prepare agent with reward function
-    agent.prepare(reward_fn=alg.reward_fn)
+    agent.prepare(reward_fn=reward_fn)
 
     # training loop
     for epoch in range(cfg.epochs):

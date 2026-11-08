@@ -17,6 +17,12 @@ def main():
     parser.add_argument("task", choices=("all", *TASKS), default="all", nargs="?")
     parser.add_argument("hydra_args", nargs=argparse.REMAINDER, help="Arguments for upstream main.py.")
     args = parser.parse_args()
+    for arg in args.hydra_args:
+        key = arg.partition("=")[0].lstrip("+~")
+        if key in {"agent", "agent.name", "alg", "alg.name", "env"} or key.startswith(
+            ("--config", "-cn", "-cp", "-cd")
+        ):
+            parser.error(f"The v2 baseline fixes the training entry point and task: {arg}")
     if sys.platform != "linux":
         parser.exit(1, "Run with the existing uv Python on the Linux training machine.\n")
 
@@ -41,7 +47,11 @@ def main():
         subprocess.run(
             [
                 sys.executable,
+                "-I",
                 str(ROOT / "scripts" / "smiling_v2_adapter.py"),
+                task,
+                "agent=sac",
+                "alg=smiling",
                 f"env=gymnasium_{task}",
                 f"expert_path={json.dumps(expert_dir.as_posix(), ensure_ascii=False)}",
                 *args.hydra_args,

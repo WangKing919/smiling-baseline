@@ -9,8 +9,17 @@ if [[ ! -d "${MUJOCO_PY_MUJOCO_PATH}" && -d /home/ubuntu/tianruijie/.mujoco/mujo
   export MUJOCO_PY_MUJOCO_PATH=/home/ubuntu/tianruijie/.mujoco/mujoco210
 fi
 export LD_LIBRARY_PATH="${MUJOCO_PY_MUJOCO_PATH}/bin:${LD_LIBRARY_PATH:-}"
-export NVIDIA_VISIBLE_DEVICES=$(strings /proc/1/environ | awk -F= '$1 == "NVIDIA_VISIBLE_DEVICES" { print $2 }')
-export CUDA_VISIBLE_DEVICES=$(nvidia-smi -i $NVIDIA_VISIBLE_DEVICES --query-gpu=index --format=csv,noheader | paste -sd ',')
+if [[ ! -v CUDA_VISIBLE_DEVICES ]]; then
+  DEVICE_IDS="${NVIDIA_VISIBLE_DEVICES:-}"
+  if [[ -z "${DEVICE_IDS}" && -r /proc/1/environ ]]; then
+    DEVICE_IDS="$(strings /proc/1/environ 2>/dev/null | awk -F= '$1 == "NVIDIA_VISIBLE_DEVICES" { print $2 }' || true)"
+  fi
+  case "${DEVICE_IDS}" in
+    ""|all|none|void) ;;
+    *) CUDA_VISIBLE_DEVICES="$(nvidia-smi -i "${DEVICE_IDS}" --query-gpu=index --format=csv,noheader | paste -sd ',')"
+       export CUDA_VISIBLE_DEVICES ;;
+  esac
+fi
 
 if [[ -z "${UV_VENV:-}" ]]; then
   UV_VENV="${HERE}/.venv"

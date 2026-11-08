@@ -2,12 +2,6 @@ defaults:
   - _self_
   - agent: sac # sac | dreamerv3
   - alg: smiling # smiling | dac | bc
-  - override hydra/job_logging: disabled
-
-hydra:
-  run:
-    dir: .
-  output_subdir: null
 
 seed: 0
 env: ball_in_cup_catch
@@ -34,11 +28,9 @@ num_eval_episodes: 1
 
 # logger
 log_frequency: 10000
-log_wandb: false # Accepted for compatibility; training always logs locally.
-local_log_root: null # Defaults to smiling_baseline/logs; overrides must stay inside smiling_baseline.
-local_log_plot_every: 100 # Outer imitation epochs; 0 plots only at the end.
+log_wandb: true
 save_model_every: 1e5
-save_video: false
+save_video: true
 
 # options
 use_action: false
