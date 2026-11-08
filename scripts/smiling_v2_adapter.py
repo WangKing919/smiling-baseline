@@ -1,9 +1,6 @@
 """Connect the project's Gymnasium v2 tasks to the upstream training entry point."""
 
-from importlib.metadata import version
-import os
 from pathlib import Path
-import platform
 import runpy
 import sys
 
@@ -45,28 +42,6 @@ class LegacyRenderEnv(gym.Wrapper):
         return self.env.render()
 
 
-def check_runtime(upstream):
-    # These are the upstream pins used by the v2 training path.
-    training_packages = {"torch", "numpy", "diffusers", "gymnasium", "hydra-core", "omegaconf"}
-    pins = {"Python": "3.10.14"}
-    actual = {"Python": platform.python_version()}
-    for requirement in (upstream / "requirements.txt").read_text().splitlines():
-        name, _, pin = requirement.partition("==")
-        if name in training_packages:
-            pins[name] = pin.split()[0]
-            actual[name] = version(name).split("+", 1)[0]
-    mismatches = [
-        f"{name} {actual[name]} (official {pin})"
-        for name, pin in pins.items()
-        if actual[name] != pin
-    ]
-    if mismatches:
-        message = "SMILING runtime differs from the official pins: " + ", ".join(mismatches)
-        if os.environ.get("SMILING_ALLOW_RUNTIME_MISMATCH") != "1":
-            raise RuntimeError(message + ". Use the pinned environment from the baseline README.")
-        print(message, file=sys.stderr, flush=True)
-
-
 def main():
     expected_task = sys.argv.pop(1)
     upstream = Path(__file__).resolve().parents[1] / "upstream"
@@ -76,8 +51,6 @@ def main():
     def make_env(cfg, index=0, *, render=True):
         if cfg.env != f"gymnasium_{expected_task}" or cfg.agent.name != "sac" or cfg.alg.name != "smiling":
             raise ValueError("The v2 entry point requires the selected Gymnasium task with SMILING + SAC")
-        if render:
-            check_runtime(upstream)
         spec = gym.spec(expected_task)
         module = V2_MODULES[expected_task]
         class_name = expected_task.removesuffix("-v2") + "Env"

@@ -4,15 +4,21 @@
 
 ## 在 Linux 训练机运行
 
-在 `smiling_baseline/` 下使用官方依赖和 MuJoCo 2.1.0。以下命令为该子项目创建独立的 uv 环境。MuJoCo 装在其他路径时设置 `MUJOCO_PY_MUJOCO_PATH`。
+在 `smiling_baseline/` 下可以直接使用云主机已有的环境，包括 Python 3.10.16、Gymnasium 1.1.1 和 PyTorch 2.13.0。MuJoCo v2 任务需要 `mujoco-py` 和 MuJoCo 2.1.0。MuJoCo 装在其他路径时设置 `MUJOCO_PY_MUJOCO_PATH`。
+
+```bash
+UV_VENV=/home/ubuntu/tianruijie/SMILING/.venv bash run_smiling_ant_v2_full.sh save_video=false
+```
+
+启动器优先使用 `UV_VENV` 指定的环境，其次查找本目录、上一级目录和云端 FisherAdv 的 `.venv`。实际依赖版本写入 `runtime.json`，同一张对比图中的运行应标注使用的环境版本。Hugging Face 和 Matplotlib 的缓存默认写入子项目的 `logs/.cache/`。
+
+需要单独创建官方锁定版本的 uv 环境时，可使用以下命令。
 
 ```bash
 uv venv --python 3.10.14 --seed .venv
 .venv/bin/python -m pip install -r upstream/requirements.txt \
   'mujoco-py==2.1.2.14' 'Cython==0.29.37' 'huggingface-hub==0.25.2'
 ```
-
-启动器优先使用 `UV_VENV` 指定的环境，其次查找本目录、上一级目录和云端 FisherAdv 的 `.venv`。Python、PyTorch、NumPy、Gymnasium、Diffusers、Hydra 和 OmegaConf 的版本在启动训练时与官方版本核对。必须使用不同版本的硬件环境时，可显式设置 `SMILING_ALLOW_RUNTIME_MISMATCH=1`。实际版本写入 `runtime.json`，同一张对比图中的运行应标注使用的环境版本。
 
 ```bash
 bash run_smiling_ant_v2_full.sh

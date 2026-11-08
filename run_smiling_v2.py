@@ -38,6 +38,18 @@ def main():
     if library_path.split(os.pathsep, 1)[0] != mujoco_bin:
         env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, (mujoco_bin, library_path)))
 
+    cache_root = ROOT / "logs" / ".cache"
+    for variable, directory in (
+        ("HF_HUB_CACHE", cache_root / "huggingface" / "hub"),
+        ("MPLCONFIGDIR", cache_root / "matplotlib"),
+    ):
+        if not env.get(variable):
+            directory = directory.resolve()
+            if not directory.is_relative_to(ROOT):
+                parser.error(f"{variable} cache must be inside {ROOT}: {directory}")
+            directory.mkdir(parents=True, exist_ok=True)
+            env[variable] = str(directory)
+
     for task in TASKS if args.task == "all" else (args.task,):
         expert_dir = ROOT / "experts" / task
         for split in ("train", "val"):
