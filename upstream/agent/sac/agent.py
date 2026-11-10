@@ -205,7 +205,11 @@ class SACAgent(Agent):
                         f"Step: {self.step}, Episode: {self.episode}, Reward: {episode_reward}"
                     )
 
-                    if eval_frequency > 0 and self.step % eval_frequency == 0:
+                    episode_start_step = self.step - episode_step
+                    if (
+                        eval_frequency > 0
+                        and self.step // eval_frequency > episode_start_step // eval_frequency
+                    ):
                         self._log_evaluation("eval", self.evaluate(return_statistics=True))
 
                     # Log the project's comparison protocol on a separate simulator.
